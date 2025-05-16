@@ -1,0 +1,243 @@
+import json,time,datetime,pdb
+import pandas as pd
+import spacy, re
+
+from presidio_analyzer import AnalyzerEngine
+from presidio_analyzer import (
+AnalyzerEngine,PatternRecognizer,EntityRecognizer,
+Pattern,RecognizerResult,)
+
+from presidio_analyzer import AnalyzerEngine,PatternRecognizer
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+
+from presidio_analyzer import AnalyzerEngine
+from presidio_anonymizer.entities import OperatorConfig
+
+from param_config import *
+ 
+
+def mask_entities(text,entities_to_mask):  
+
+    nlp = spacy.load("en_core_web_lg")  
+    doc = nlp(text)  
+  
+    masked_entities = {}  
+    entity_counters = {}  
+  
+    for ent in doc.ents:
+        entity_type = ent.label_  
+        if entity_type in entities_to_mask:
+            if entity_type not in entity_counters:  
+                entity_counters[entity_type] = 1  
+
+            mask = f"<{entity_type}_{entity_counters[entity_type]}>"
+
+            text = re.sub(re.escape(ent.text), mask, text)  
+
+            masked_entities[mask] = ent.text
+            entity_counters[entity_type] += 1  
+  
+    return text, masked_entities
+
+
+def mask_swift_code(text):
+    
+    swift_code_regex = r'[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?'
+    
+    masked_text = text
+    entity_map = {}
+    entity_count = 1
+    
+    for match in re.finditer(swift_code_regex, text):
+        placeholder = f"<SWIFT_CODE_{entity_count}>"
+        masked_text = masked_text.replace(match.group(), placeholder)
+        
+        if placeholder not in entity_map:  
+            entity_map[placeholder] = match.group()  
+          
+        entity_count += 1  
+        
+    return masked_text, entity_map
+
+
+def replace_entities(text, masked_entities):  
+     
+    for mask, entity in masked_entities.items(): 
+        text = re.sub(re.escape(mask), entity, text)  
+  
+    return text
+
+
+def deanonymize(text, mapping):
+    
+    for entity_type, entity_map in mapping.items():
+        for anonymized_text, original_text in entity_map.items():
+            text = text.replace(anonymized_text, original_text)
+
+    return text
+
+
+def privacy(text,platform,df_thrs):
+
+    global anonymizer
+    privacy_thrs = df_thrs['pre_privacy_thrs'].iloc[0]  
+    print (privacy_thrs)
+    anonymizer.reset_deanonymizer_mapping()
+
+    timings = {}
+
+    start_time = time.time()
+    timings['start_time'] = str(datetime.datetime.now())
+
+    text = ' '.join(text.split())
+
+    #Defining the analyzer and loading the anonymizer
+    analyzer = AnalyzerEngine(nlp_engine = config.engine, supported_languages=["en"])
+    
+    try:
+        if (platform.lower() == 'tap'):
+
+            UK_National_Insurance_Number_NINO = PatternRecognizer(supported_entity="U.K. National Insurance Number (NINO)", patterns=[
+            Pattern(name="U.K. National Insurance Number (NINO)", regex=r'(?i)\b(?:[a-z]{2}\d{6}[abcd]|[a-z]{2}[-\s]\d{2}[-\s]\d{2}[-\s]\d{2}[-\s][abcd])\b', score=0.80)  ])
+
+            UK_National_Health_Service_NHS_Number = PatternRecognizer(supported_entity="U.K. National Health Service (NHS) Number", patterns=[
+            Pattern(name="U.K. National Health Service (NHS) Number", regex=r'\b(?:\d{3}|\d{10}) \d{3} \d{4}\b', score=0.80)  ])
+
+            UK_or_US_Passport_Number = PatternRecognizer(supported_entity="U.K. or U.S. Passport Number", patterns=[
+            Pattern(name="U.K. or U.S. Passport Number", regex=r'\b[a-zA-Z0-9]\d{8}\b', score=0.80)])
+
+            UK_or_US_Unique_Taxpayer_Reference_Number = PatternRecognizer(supported_entity="U.K. or U.S. Unique Taxpayer Reference Number", patterns=[
+            Pattern(name="U.K. or U.S. Unique Taxpayer Reference Number", regex=r'\b(?:\d{10}|9\d{2}[- ]?(?:[5-6][0-5]|[7-8][0-8]|9[0-2]|9[4-9])[- ]?\d{4}|9\d{2}(?:[5-6][0-5]|[7-8][0-8]|9[0-2]|9[4-9])\d{4})\b', score=0.80)])
+
+            UK_Drivers_License_Number = PatternRecognizer(supported_entity="U.K. Driver's License", patterns=[
+            Pattern(name="U.K. Driver's License ", regex=r'(?i)\b[a-z9]{5}\d(?:0[1-9]|1[0-2]|5[1-9]|6[0-2])\d{3}[a-z9]{2}\d{5}\b', score=0.80)])
+
+            UK_Electoral_Roll_Number = PatternRecognizer(supported_entity="U.K. Electoral Roll Number", patterns=[
+            Pattern(name="U.K. Electoral Roll Number", regex=r'(?i)\b[a-z]{2}\d{1,4}\b', score=0.80)])
+
+            '''
+            UK_National_Insurance_Number_NINO = PatternRecognizer(supported_entity="U.K. National Insurance Number (NINO)", patterns=[
+                Pattern(name="U.K. National Insurance Number (NINO)", regex=r'\bUKNINO-[AEKLHTY][ABEHKLMPRSTWXYZ]\d{6}[A-D]\b|\bUKNINO-B[ABEHKLMT]\d{6}[A-D]\b|\bUKNINO-C[ABEHKLR]\d{6}[A-D]\b|\bUKNINO-GY\d{6}[A-D]\b|\bUKNINO-J[ABCEGHJKLMNPRSTWXYZ]\d{6}[A-D]\b|\bUKNINO-M[AWX]\d{6}[A-D]\b|\bUKNINO-N[ABEHLMPRSWXYZ]\d{6}[A-D]\b|\bUKNINO-O[ABEHKLMPRSX]\d{6}[A-D]\b|\bUKNINO-P[ABCEGHJLMNPRSTWXY]\d{6}[A-D]\b|\bUKNINO-R[ABEHKMPRSTWXYZ]\d{6}[A-D]\b|\bUKNINO-S[ABCGHJKLMNPRSTWXYZ]\d{6}[A-D]\b|\bUKNINO-W[ABEKLMP]\d{6}[A-D]\b|\bUKNINO-Z[ABEHKLMPRSTWXY]\d{6}[A-D]\b', score=0.80)  ])
+
+            UK_National_Health_Service_NHS_Number = PatternRecognizer(supported_entity="U.K. National Health Service (NHS) Number", patterns=[
+                Pattern(name="U.K. National Health Service (NHS) Number", regex=r'\bUKNHS-[A-CEGHJ-PR-TW-Z]{1}[A-CEGHJ-NPR-TW-Z]{1}[0-9]{6}[A-DFM]{0,1}\b|\bUKNHS-\d{3}\.\d{3}\.\d{4}\b|\bUKNHS-\d{3}\d{3}\d{4}\b|\bUKNHS-\d{3}-\d{3}-\d{4}\b|\bUKNHS-\d{3} \d{3} \d{4}\b', score=0.80)  ])
+
+            UK_or_US_Passport_Number = PatternRecognizer(supported_entity="U.K. or U.S. Passport Number", patterns=[
+                                                                    Pattern(name="U.K. or U.S. Passport Number", regex=r'\bUKUSP-(\d{8}|\d{9})\b', score=0.80)])
+
+            UK_or_US_Unique_Taxpayer_Reference_Number = PatternRecognizer(supported_entity="U.K. or U.S. Unique Taxpayer Reference Number", patterns=[
+                                                                    Pattern(name="U.K. or U.S. Unique Taxpayer Reference Number", regex=r'\bUKUTR-(\d{5} \d{5}|\d{10}|9[0-9]{2}[7-8][0-9]{5}|9[0-9]{2}-[7-8][0-9]-[0-9]{4}|9[0-9]{2} [7-8][0-9] [0-9]{4}|9[0-9]{2}\.[7-8][0-9]\.[0-9]{4})\b', score=0.80)])
+
+            UK_Drivers_License_Number = PatternRecognizer(supported_entity="U.K. Driver's License", patterns=[
+                                                                    Pattern(name="U.K. Driver's License ", regex=r'\bUKDL-[A-Z0-9]{5}\d[0156]\d([0][1-9]|[12]\d|3[01])\d[A-Z0-9]{3}[A-Z]{2}\b', score=0.80)])
+
+            UK_Electoral_Roll_Number = PatternRecognizer(supported_entity="U.K. Electoral Roll Number", patterns=[
+                                                                    Pattern(name="U.K. Electoral Roll Number", regex=r'\bUKER-[A-Z]{2,3}\d{1,4}\b', score=0.80)])
+            '''
+
+            analyzer.registry.add_recognizer(UK_Electoral_Roll_Number)
+            analyzer.registry.add_recognizer(UK_National_Health_Service_NHS_Number)
+            analyzer.registry.add_recognizer(UK_National_Insurance_Number_NINO)
+            analyzer.registry.add_recognizer(UK_or_US_Passport_Number)
+            analyzer.registry.add_recognizer(UK_or_US_Unique_Taxpayer_Reference_Number)
+            analyzer.registry.add_recognizer(UK_Drivers_License_Number)
+
+            anonymizer = config.anonymizer_tap
+            anonymizer.add_recognizer(UK_or_US_Passport_Number)
+            anonymizer.add_recognizer(UK_or_US_Unique_Taxpayer_Reference_Number)
+            anonymizer.add_recognizer(UK_Drivers_License_Number)
+            anonymizer.add_recognizer(UK_Electoral_Roll_Number)
+            anonymizer.add_recognizer(UK_National_Insurance_Number_NINO)
+            anonymizer.add_recognizer(UK_National_Health_Service_NHS_Number)
+
+            entities = analyzer.get_supported_entities()
+            #skip_ent_1 = ['LOCATION', 'UK_NHS']
+            skip_ent_1 = ['UK_NHS']
+            skip_ent = [i for i in entities if (i not in skip_ent_1)]
+            
+            skip_ent = [i for i in entities if i!='LOCATION']
+         
+            results = analyzer.analyze(text=text, language='en',entities=skip_ent)
+            #entities_to_anonymize = [(entity.entity_type, text[entity.start:entity.end], entity.score) for entity in results if entity.score >= config.thresholds['privacy']]
+            #entities_to_anonymize = [(entity.entity_type, text[entity.start:entity.end], entity.score) for entity in results if entity.score >= float(privacy_thrs)]
+            entities_to_anonymize = [(entity.entity_type, text[entity.start:entity.end], entity.score) for entity in results if entity.score >= float(df_thrs['pre_privacy_thrs'].iloc[0])]
+            for entity_type, entity_text, score in entities_to_anonymize:
+                anonymized_text = anonymizer.anonymize(entity_text, language='en')
+                text = text.replace(entity_text, anonymized_text)
+
+
+            anonymized_text = text
+            mapping = anonymizer.deanonymizer_mapping
+
+            elapsed_time = time.time() - start_time
+            timings['end_time'] = str(datetime.datetime.now())
+            print(f"Data Privacy Time Taken: {elapsed_time}")
+
+            return anonymized_text,anonymizer,timings, mapping
+
+        elif(platform.lower() == 'chroma'):
+            
+            #Masking roles from file
+            df = pd.read_csv('/IPE/ML/Guardrails/roles.csv')
+            roles = df['Roles'].tolist()
+            
+            masked_text_swift, entity_map_swift = mask_swift_code(text)
+            masked_text, entity_map = mask_entities(masked_text_swift,["ORG"])      
+
+            aadhar_number_recognizer = PatternRecognizer(supported_entity="AADHAR_NUMBER", patterns=[
+                                                                    Pattern(name="Aadhar Number", regex=r"\b\d{12}\b", score=0.60)])
+
+            credit_card_recognizer = PatternRecognizer(supported_entity="CREDIT_CARD", patterns=[
+                                                                    Pattern(name="Credit Card Number", regex=r"\b\d{16}\b", score=0.60)])
+
+            SWIFT_recognizer = PatternRecognizer(supported_entity="SWIFT_CODE", patterns=[
+                                                                    Pattern(name="Swift Code", regex=r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", score=0.60)],context=["swift", "swiftcode"])
+
+            roles_recognizer = PatternRecognizer(supported_entity="PERSON_TYPE", deny_list=roles)
+
+
+            analyzer.registry.add_recognizer(aadhar_number_recognizer)
+            analyzer.registry.add_recognizer(credit_card_recognizer)
+            analyzer.registry.add_recognizer(SWIFT_recognizer)
+            analyzer.registry.add_recognizer(roles_recognizer)
+
+            anonymizer = config.anonymizer
+
+            anonymizer.add_recognizer(aadhar_number_recognizer)
+            anonymizer.add_recognizer(credit_card_recognizer)
+            anonymizer.add_recognizer(SWIFT_recognizer)
+            anonymizer.add_recognizer(roles_recognizer)
+
+            entities = analyzer.get_supported_entities()
+            skip_ent = [i for i in entities]
+            
+
+
+    except:
+        entities = analyzer.get_supported_entities()
+        skip_ent = [i for i in entities]
+
+    #skip_ent = [i for i in entities if i!='LOCATION']
+    tech_skills = ['Kotlin','Jenkins','Docker','Swift','Java', 'Kubernetes', 'AWS','Django','Mocha','C++','Github','GitLab','Python','React Native','Node.js','GitHub','\\n Max Exp :','\\n Skills']
+    results = analyzer.analyze(text=text, language='en',entities=skip_ent, allow_list = tech_skills+['SWIFT_CODE_1','SWIFT_CODE_2','SWIFT_CODE_3','SWIFT_CODE_4','SWIFT_CODE_5'])
+    
+    #entities_to_anonymize = [(entity.entity_type, text[entity.start:entity.end], entity.score) for entity in results if entity.score >= config.thresholds['privacy']]
+    entities_to_anonymize = [(entity.entity_type, text[entity.start:entity.end], entity.score) for entity in results if entity.score >= float(df_thrs['pre_privacy_thrs'].iloc[0])]
+    for entity_type, entity_text, score in entities_to_anonymize:
+        anonymized_text = anonymizer.anonymize(entity_text, language='en')
+        #text = text.replace(entity_text, anonymized_text)
+        if anonymized_text[1:-1] != entity_type:
+            anonymized_text = f"<{entity_type}>"
+            masked_text = masked_text.replace(entity_text, anonymized_text)
+        else:
+            masked_text = masked_text.replace(entity_text, anonymized_text)
+
+    #anonymized_text = text
+    anonymized_text = masked_text
+    mapping = anonymizer.deanonymizer_mapping|entity_map_swift|entity_map
+        
+    elapsed_time = time.time() - start_time
+    timings['end_time'] = str(datetime.datetime.now())
+    print(f"Data Privacy Time Taken: {elapsed_time}")
+
+    return anonymized_text,anonymizer,timings, mapping
